@@ -1,0 +1,13 @@
+{
+	"comment": "",
+	"ignore": "",
+	"package": [
+		{
+			"checksumSHA1": "rf/Df8KYxNcQjEMFm0InUly1Qs4=",
+			"path": "github.com/prometheus/prometheus",
+			"revision": "b1566f761ef7d1c8ab6446afd017c0ce17e9224e",
+			"revisionTime": "2022-11-09T13:28:14Z"
+		}
+	],
+	"rootPath": "github.com/wgliang/cortex"
+}

@@ -880,6 +880,7 @@ type extendedAppender interface {
 
 // Push adds metrics to a block
 func (i *Ingester) Push(ctx context.Context, req *cortexpb.WriteRequest) (*cortexpb.WriteResponse, error) {
+	// 自检下目前是否处于正常运行状态，在非正常状态禁止读写TSDB
 	if err := i.checkRunning(); err != nil {
 		return nil, err
 	}
@@ -888,6 +889,7 @@ func (i *Ingester) Push(ctx context.Context, req *cortexpb.WriteRequest) (*corte
 	inflight := i.inflightPushRequests.Inc()
 	defer i.inflightPushRequests.Dec()
 
+	// 获取instance限制
 	gl := i.getInstanceLimits()
 	if gl != nil && gl.MaxInflightPushRequests > 0 {
 		if inflight > gl.MaxInflightPushRequests {
@@ -906,6 +908,7 @@ func (i *Ingester) Push(ctx context.Context, req *cortexpb.WriteRequest) (*corte
 		return nil, err
 	}
 
+	// TODO: 为什么获取两次?
 	il := i.getInstanceLimits()
 	if il != nil && il.MaxIngestionRate > 0 {
 		if rate := i.ingestionRate.Rate(); rate >= il.MaxIngestionRate {
@@ -956,12 +959,14 @@ func (i *Ingester) Push(ctx context.Context, req *cortexpb.WriteRequest) (*corte
 		}
 	)
 
+	// 遍历samples写入
 	// Walk the samples, appending them to the users database
 	app := db.Appender(ctx).(extendedAppender)
 	for _, ts := range req.Timeseries {
 		// The labels must be sorted (in our case, it's guaranteed a write request
 		// has sorted labels once hit the ingester).
 
+		// 找到当前series的指向
 		// Look up a reference for this series.
 		ref, copiedLabels := app.GetRef(cortexpb.FromLabelAdaptersToLabels(ts.Labels))
 
@@ -990,6 +995,9 @@ func (i *Ingester) Push(ctx context.Context, req *cortexpb.WriteRequest) (*corte
 			}
 
 			failedSamplesCount++
+
+			// 检查错误是否是我们可以继续的软错误。 如果是这样，我们会对其进行跟踪，以便我们可以将其返回给分销商，分
+			// 销商将向客户端返回 400 错误。 客户端（Prometheus）不会在 400 重试，我们实际上摄取了所有没有失败的样本。
 
 			// Check if the error is a soft error we can proceed on. If so, we keep track
 			// of it, so that we can return it back to the distributor, which will return a
@@ -1189,12 +1197,14 @@ func (i *Ingester) Query(ctx context.Context, req *client.QueryRequest) (*client
 		return &client.QueryResponse{}, nil
 	}
 
+	// 去TSDB根据前后范围查找
 	q, err := db.Querier(ctx, int64(from), int64(through))
 	if err != nil {
 		return nil, err
 	}
 	defer q.Close()
 
+	// 这里不需要返回已排序的系列，因为系列是由 Cortex 查询器排序的，去TSDB获取匹配labells的数据
 	// It's not required to return sorted series because series are sorted by the Cortex querier.
 	ss := q.Select(false, nil, matchers...)
 	if ss.Err() != nil {
@@ -1203,6 +1213,7 @@ func (i *Ingester) Query(ctx context.Context, req *client.QueryRequest) (*client
 
 	numSamples := 0
 
+	// 遍历构建查询结果
 	result := &client.QueryResponse{}
 	for ss.Next() {
 		series := ss.At()
@@ -1210,10 +1221,12 @@ func (i *Ingester) Query(ctx context.Context, req *client.QueryRequest) (*client
 			continue
 		}
 
+		// 获取Labels
 		ts := cortexpb.TimeSeries{
 			Labels: cortexpb.FromLabelsToLabelAdapters(series.Labels()),
 		}
 
+		// 合并Samples
 		it := series.Iterator()
 		for it.Next() {
 			t, v := it.At()
@@ -1770,6 +1783,10 @@ func (i *Ingester) getOrCreateTSDB(userID string, force bool) (*userTSDB, error)
 	if ok {
 		return db, nil
 	}
+
+	// 我们已经准备好创建 TSDB，但是我们必须确保 ingester 处于 ACTIVE 状态，否则可能会与转入/转出冲突。
+	// TSDB 是在推送第一个系列时创建的，这不应该发生在非 ACTIVE ingester 上，但是我们希望防止任何错误，
+	// 因为如果之前创建 TSDB，我们可能会丢失数据或 TSDB WAL 损坏 /在转入期间发生。
 
 	// We're ready to create the TSDB, however we must be sure that the ingester
 	// is in the ACTIVE state, otherwise it may conflict with the transfer in/out.
@@ -2601,6 +2618,7 @@ func wrappedTSDBIngestExemplarErr(ingestErr error, timestamp model.Time, seriesL
 }
 
 func (i *Ingester) getInstanceLimits() *InstanceLimits {
+	// 开始时不要应用任何限制。 我们特别不想在重放 WAL 时将系列应用于内存限制
 	// Don't apply any limits while starting. We especially don't want to apply series in memory limit while replaying WAL.
 	if i.State() == services.Starting {
 		return nil

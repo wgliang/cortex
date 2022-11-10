@@ -550,6 +550,7 @@ func (d *Distributor) validateSeries(ts cortexpb.PreallocTimeseries, userID stri
 
 // Push implements client.IngesterServer
 func (d *Distributor) Push(ctx context.Context, req *cortexpb.WriteRequest) (*cortexpb.WriteResponse, error) {
+	// 获取用户的租户ID
 	userID, err := tenant.TenantID(ctx)
 	if err != nil {
 		return nil, err
@@ -569,25 +570,32 @@ func (d *Distributor) Push(ctx context.Context, req *cortexpb.WriteRequest) (*co
 		}
 	}
 
+	// 更新活跃用户最新时间
 	now := time.Now()
 	d.activeUsers.UpdateUserTimestamp(userID, now)
-
+	// 获取来源IP
 	source := util.GetSourceIPsFromOutgoingCtx(ctx)
 
 	var firstPartialErr error
 	removeReplica := false
 
+	// 获取Samples和Exemplars（对应用程序发布的指标之外的数据的引用）数量
 	numSamples := 0
 	numExemplars := 0
 	for _, ts := range req.Timeseries {
 		numSamples += len(ts.Samples)
 		numExemplars += len(ts.Exemplars)
 	}
+	// 在验证或重复数据删除之前计算样本总数，以便与其他指标进行比较
 	// Count the total samples in, prior to validation or deduplication, for comparison with other metrics.
 	d.incomingSamples.WithLabelValues(userID).Add(float64(numSamples))
 	d.incomingExemplars.WithLabelValues(userID).Add(float64(numExemplars))
+	// 计算总的metadata信息
 	// Count the total number of metadata in.
 	d.incomingMetadata.WithLabelValues(userID).Add(float64(len(req.Metadata)))
+
+	// WriteRequest 只能包含series或元数据，但不能同时包含两者。 这在未来可能会改变。
+	// 对于每个时间序列或样本，我们计算一个散列以分布在摄取者之间；检查每个样本/元数据，如果超出限制则丢弃。
 
 	// A WriteRequest can only contain series or metadata but not both. This might change in the future.
 	// For each timeseries or samples, we compute a hash to distribute across ingesters;
@@ -599,10 +607,12 @@ func (d *Distributor) Push(ctx context.Context, req *cortexpb.WriteRequest) (*co
 	validatedSamples := 0
 	validatedExemplars := 0
 
+	//使用覆盖缓存用户限制，因此我们花费更少的 CPU 进行锁定。
 	// Cache user limit with overrides so we spend less CPU doing locking. See issue #4904
 	limits := d.limits.GetOverridesForUser(userID)
 
 	if limits.AcceptHASamples && len(req.Timeseries) > 0 {
+		// TODO: findHALabels
 		cluster, replica := findHALabels(limits.HAReplicaLabel, limits.HAClusterLabel, req.Timeseries[0].Labels)
 		removeReplica, err = d.checkSample(ctx, userID, cluster, replica, limits)
 		if err != nil {
@@ -636,11 +646,14 @@ func (d *Distributor) Push(ctx context.Context, req *cortexpb.WriteRequest) (*co
 		}
 	}()
 
+	// 对于每个时间序列，计算一个散列以分布在摄取者之间；检查每个样本，如果超出限制则丢弃
+
 	// For each timeseries, compute a hash to distribute across ingesters;
 	// check each sample and discard if outside limits.
 
 	skipLabelNameValidation := d.cfg.SkipLabelNameValidation || req.GetSkipLabelNameValidation()
 	for _, ts := range req.Timeseries {
+		// 使用系列中最新样本的时间戳。 如果series的samples没有排序，则用户的metric可能是错误的。
 		// Use timestamp of latest sample in the series. If samples for series are not ordered, metric for user may be wrong.
 		if len(ts.Samples) > 0 {
 			latestSampleTimestampMs = util_math.Max64(latestSampleTimestampMs, ts.Samples[len(ts.Samples)-1].TimestampMs)
@@ -649,6 +662,7 @@ func (d *Distributor) Push(ctx context.Context, req *cortexpb.WriteRequest) (*co
 		if mrc := limits.MetricRelabelConfigs; len(mrc) > 0 {
 			l := relabel.Process(cortexpb.FromLabelAdaptersToLabels(ts.Labels), mrc...)
 			if len(l) == 0 {
+				// TODO:
 				// all labels are gone, samples will be discarded
 				validation.DiscardedSamples.WithLabelValues(
 					validation.DroppedByRelabelConfiguration,
@@ -659,6 +673,8 @@ func (d *Distributor) Push(ctx context.Context, req *cortexpb.WriteRequest) (*co
 			ts.Labels = cortexpb.FromLabelsToLabelAdapters(l)
 		}
 
+		// 如果我们找到了集群标签和副本标签，我们只想在 Cortex 中存储系列时包含集群标签。 如果我们保留副本标签，那么当 HA 跟踪
+		// 转移到不同的副本时，我们将尝试对同一系列进行重复数据删除，最终会得到另一个系列。
 		// If we found both the cluster and replica labels, we only want to include the cluster label when
 		// storing series in Cortex. If we kept the replica label we would end up with another series for the same
 		// series we're trying to dedupe when HA tracking moves over to a different replica.
@@ -829,6 +845,7 @@ func sortLabelsIfNeeded(labels []cortexpb.LabelAdapter) {
 }
 
 func (d *Distributor) send(ctx context.Context, ingester ring.InstanceDesc, timeseries []cortexpb.PreallocTimeseries, metadata []*cortexpb.MetricMetadata, source cortexpb.WriteRequest_SourceEnum) error {
+	// 从ingester的客户端池选择一个
 	h, err := d.ingesterPool.GetClientFor(ingester.Addr)
 	if err != nil {
 		return err
