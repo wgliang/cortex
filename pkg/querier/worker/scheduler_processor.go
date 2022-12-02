@@ -15,6 +15,7 @@ import (
 	"github.com/weaveworks/common/httpgrpc"
 	"github.com/weaveworks/common/middleware"
 	"github.com/weaveworks/common/user"
+	"go.uber.org/atomic"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/health/grpc_health_v1"
 
@@ -37,12 +38,14 @@ func newSchedulerProcessor(cfg Config, handler RequestHandler, log log.Logger, r
 		maxMessageSize: cfg.GRPCClientConfig.MaxSendMsgSize,
 		querierID:      cfg.QuerierID,
 		grpcConfig:     cfg.GRPCClientConfig,
-
 		frontendClientRequestDuration: promauto.With(reg).NewHistogramVec(prometheus.HistogramOpts{
 			Name:    "cortex_querier_query_frontend_request_duration_seconds",
 			Help:    "Time spend doing requests to frontend.",
 			Buckets: prometheus.ExponentialBuckets(0.001, 4, 6),
 		}, []string{"operation", "status_code"}),
+		schedulerClientFactory: func(conn *grpc.ClientConn) schedulerpb.SchedulerForQuerierClient {
+			return schedulerpb.NewSchedulerForQuerierClient(conn)
+		},
 	}
 
 	frontendClientsGauge := promauto.With(reg).NewGauge(prometheus.GaugeOpts{
@@ -70,11 +73,12 @@ type schedulerProcessor struct {
 
 	frontendPool                  *client.Pool
 	frontendClientRequestDuration *prometheus.HistogramVec
+	schedulerClientFactory        func(conn *grpc.ClientConn) schedulerpb.SchedulerForQuerierClient
 }
 
 // notifyShutdown implements processor.
 func (sp *schedulerProcessor) notifyShutdown(ctx context.Context, conn *grpc.ClientConn, address string) {
-	client := schedulerpb.NewSchedulerForQuerierClient(conn)
+	client := sp.schedulerClientFactory(conn)
 
 	req := &schedulerpb.NotifyQuerierShutdownRequest{QuerierID: sp.querierID}
 	if _, err := client.NotifyQuerierShutdown(ctx, req); err != nil {
@@ -83,12 +87,17 @@ func (sp *schedulerProcessor) notifyShutdown(ctx context.Context, conn *grpc.Cli
 	}
 }
 
-func (sp *schedulerProcessor) processQueriesOnSingleStream(ctx context.Context, conn *grpc.ClientConn, address string) {
-	schedulerClient := schedulerpb.NewSchedulerForQuerierClient(conn)
+func (sp *schedulerProcessor) processQueriesOnSingleStream(workerCtx context.Context, conn *grpc.ClientConn, address string) {
+	schedulerClient := sp.schedulerClientFactory(conn)
 
-	backoff := backoff.New(ctx, processorBackoffConfig)
+	// Run the querier loop (and so all the queries) in a dedicated context that we call the "execution context".
+	// The execution context is cancelled once the workerCtx is cancelled AND there's no inflight query executing.
+	execCtx, execCancel, inflightQuery := newExecutionContext(workerCtx, sp.log)
+	defer execCancel()
+
+	backoff := backoff.New(execCtx, processorBackoffConfig)
 	for backoff.Ongoing() {
-		c, err := schedulerClient.QuerierLoop(ctx)
+		c, err := schedulerClient.QuerierLoop(execCtx)
 		if err == nil {
 			err = c.Send(&schedulerpb.QuerierToScheduler{QuerierID: sp.querierID})
 		}
@@ -99,7 +108,7 @@ func (sp *schedulerProcessor) processQueriesOnSingleStream(ctx context.Context, 
 			continue
 		}
 
-		if err := sp.querierLoop(c, address); err != nil {
+		if err := sp.querierLoop(c, address, inflightQuery); err != nil {
 			level.Error(sp.log).Log("msg", "error processing requests from scheduler", "err", err, "addr", address)
 			backoff.Wait()
 			continue
@@ -110,7 +119,7 @@ func (sp *schedulerProcessor) processQueriesOnSingleStream(ctx context.Context, 
 }
 
 // process loops processing requests on an established stream.
-func (sp *schedulerProcessor) querierLoop(c schedulerpb.SchedulerForQuerier_QuerierLoopClient, address string) error {
+func (sp *schedulerProcessor) querierLoop(c schedulerpb.SchedulerForQuerier_QuerierLoopClient, address string, inflightQuery *atomic.Bool) error {
 	// Build a child context so we can cancel a query when the stream is closed.
 	ctx, cancel := context.WithCancel(c.Context())
 	defer cancel()
@@ -121,12 +130,16 @@ func (sp *schedulerProcessor) querierLoop(c schedulerpb.SchedulerForQuerier_Quer
 			return err
 		}
 
+		inflightQuery.Store(true)
+
 		// Handle the request on a "background" goroutine, so we go back to
 		// blocking on c.Recv().  This allows us to detect the stream closing
 		// and cancel the query.  We don't actually handle queries in parallel
 		// here, as we're running in lock step with the server - each Recv is
 		// paired with a Send.
 		go func() {
+			defer inflightQuery.Store(false)
+
 			// We need to inject user into context for sending response back.
 			ctx := user.InjectOrgID(ctx, request.UserID)
 

@@ -21,6 +21,9 @@ func TestQueues(t *testing.T) {
 	assert.Nil(t, q)
 	assert.Equal(t, "", u)
 
+	uq.addQuerierConnection("querier-1")
+	uq.addQuerierConnection("querier-2")
+
 	// Add queues: [one]
 	qOne := getOrAdd(t, uq, "one", 0)
 	lastUserIndex = confirmOrderForQuerier(t, uq, "querier-1", lastUserIndex, qOne, qOne)
@@ -65,6 +68,36 @@ func TestQueues(t *testing.T) {
 
 	q, _, _ = uq.getNextQueueForQuerier(lastUserIndex, "querier-1")
 	assert.Nil(t, q)
+}
+
+func TestQueuesOnTerminatingQuerier(t *testing.T) {
+	uq := newUserQueues(0, 0)
+	assert.NotNil(t, uq)
+	assert.NoError(t, isConsistent(uq))
+
+	uq.addQuerierConnection("querier-1")
+	uq.addQuerierConnection("querier-2")
+
+	// Add queues: [one, two]
+	qOne := getOrAdd(t, uq, "one", 0)
+	qTwo := getOrAdd(t, uq, "two", 0)
+	confirmOrderForQuerier(t, uq, "querier-1", -1, qOne, qTwo, qOne, qTwo)
+	confirmOrderForQuerier(t, uq, "querier-2", -1, qOne, qTwo, qOne, qTwo)
+
+	// After notify shutdown for querier-2, it's expected to own no queue.
+	uq.notifyQuerierShutdown("querier-2")
+	q, u, _ := uq.getNextQueueForQuerier(-1, "querier-2")
+	assert.Nil(t, q)
+	assert.Equal(t, "", u)
+
+	// However, querier-1 still get queues because it's still running.
+	confirmOrderForQuerier(t, uq, "querier-1", -1, qOne, qTwo, qOne, qTwo)
+
+	// After disconnecting querier-2, it's expected to own no queue.
+	uq.removeQuerier("querier-2")
+	q, u, _ = uq.getNextQueueForQuerier(-1, "querier-2")
+	assert.Nil(t, q)
+	assert.Equal(t, "", u)
 }
 
 func TestQueuesWithQueriers(t *testing.T) {
