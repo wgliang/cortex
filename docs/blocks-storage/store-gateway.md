@@ -213,7 +213,7 @@ store_gateway:
       # Backend storage to use for the ring. Supported values are: consul, etcd,
       # inmemory, memberlist, multi.
       # CLI flag: -store-gateway.sharding-ring.store
-      [store: <string> | default = "consul"]
+      [store: <string> | default = "memberlist"]
 
       # The prefix for the keys in the store. Should end with a /.
       # CLI flag: -store-gateway.sharding-ring.prefix

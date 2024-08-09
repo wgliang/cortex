@@ -103,8 +103,8 @@ func (cfg *HATrackerConfig) Validate() error {
 		return fmt.Errorf(errInvalidFailoverTimeout, cfg.FailoverTimeout, minFailureTimeout)
 	}
 
-	// Tracker kv store only supports consul and etcd.
-	storeAllowedList := []string{"consul", "etcd"}
+	// Tracker kv store only supports consul, memberlist and etcd.
+	storeAllowedList := []string{"consul", "etcd", "memberlist"}
 	for _, as := range storeAllowedList {
 		if cfg.KVStore.Store == as {
 			return nil

@@ -198,7 +198,7 @@ compactor:
       # Backend storage to use for the ring. Supported values are: consul, etcd,
       # inmemory, memberlist, multi.
       # CLI flag: -compactor.ring.store
-      [store: <string> | default = "consul"]
+      [store: <string> | default = "memberlist"]
 
       # The prefix for the keys in the store. Should end with a /.
       # CLI flag: -compactor.ring.prefix

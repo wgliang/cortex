@@ -303,7 +303,7 @@ sharding_ring:
     # Backend storage to use for the ring. Supported values are: consul, etcd,
     # inmemory, memberlist, multi.
     # CLI flag: -alertmanager.sharding-ring.store
-    [store: <string> | default = "consul"]
+    [store: <string> | default = "memberlist"]
 
     # The prefix for the keys in the store. Should end with a /.
     # CLI flag: -alertmanager.sharding-ring.prefix
@@ -2136,7 +2136,7 @@ sharding_ring:
     # Backend storage to use for the ring. Supported values are: consul, etcd,
     # inmemory, memberlist, multi.
     # CLI flag: -compactor.ring.store
-    [store: <string> | default = "consul"]
+    [store: <string> | default = "memberlist"]
 
     # The prefix for the keys in the store. Should end with a /.
     # CLI flag: -compactor.ring.prefix
@@ -2407,7 +2407,7 @@ ha_tracker:
     # Backend storage to use for the ring. Supported values are: consul, etcd,
     # inmemory, memberlist, multi.
     # CLI flag: -distributor.ha-tracker.store
-    [store: <string> | default = "consul"]
+    [store: <string> | default = "memberlist"]
 
     # The prefix for the keys in the store. Should end with a /.
     # CLI flag: -distributor.ha-tracker.prefix
@@ -2497,7 +2497,7 @@ ring:
     # Backend storage to use for the ring. Supported values are: consul, etcd,
     # inmemory, memberlist, multi.
     # CLI flag: -distributor.ring.store
-    [store: <string> | default = "consul"]
+    [store: <string> | default = "memberlist"]
 
     # The prefix for the keys in the store. Should end with a /.
     # CLI flag: -distributor.ring.prefix
@@ -2797,7 +2797,7 @@ lifecycler:
       # Backend storage to use for the ring. Supported values are: consul, etcd,
       # inmemory, memberlist, multi.
       # CLI flag: -ring.store
-      [store: <string> | default = "consul"]
+      [store: <string> | default = "memberlist"]
 
       # The prefix for the keys in the store. Should end with a /.
       # CLI flag: -ring.prefix
@@ -4258,7 +4258,7 @@ ring:
     # Backend storage to use for the ring. Supported values are: consul, etcd,
     # inmemory, memberlist, multi.
     # CLI flag: -ruler.ring.store
-    [store: <string> | default = "consul"]
+    [store: <string> | default = "memberlist"]
 
     # The prefix for the keys in the store. Should end with a /.
     # CLI flag: -ruler.ring.prefix
@@ -5189,7 +5189,7 @@ sharding_ring:
     # Backend storage to use for the ring. Supported values are: consul, etcd,
     # inmemory, memberlist, multi.
     # CLI flag: -store-gateway.sharding-ring.store
-    [store: <string> | default = "consul"]
+    [store: <string> | default = "memberlist"]
 
     # The prefix for the keys in the store. Should end with a /.
     # CLI flag: -store-gateway.sharding-ring.prefix

@@ -112,10 +112,10 @@ func TestHATrackerConfig_Validate(t *testing.T) {
 			cfg: func() HATrackerConfig {
 				cfg := HATrackerConfig{}
 				flagext.DefaultValues(&cfg)
-				cfg.KVStore.Store = "memberlist"
+				cfg.KVStore.Store = "inmemory"
 				return cfg
 			}(),
-			expectedErr: fmt.Errorf("invalid HATracker KV store type: %s", "memberlist"),
+			expectedErr: fmt.Errorf("invalid HATracker KV store type: %s", "inmemory"),
 		},
 	}
 
